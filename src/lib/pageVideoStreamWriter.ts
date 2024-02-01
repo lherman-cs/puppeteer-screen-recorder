@@ -35,6 +35,7 @@ export default class PageVideoStreamWriter extends EventEmitter {
 
   private videoMediatorStream: PassThrough = new PassThrough();
   private writerPromise: Promise<boolean>;
+  private lastWriteTimestamp: number | null = null;
 
   constructor(destinationSource: string | Writable, options?: VideoOptions) {
     super();
@@ -229,6 +230,28 @@ export default class PageVideoStreamWriter extends EventEmitter {
   }
 
   public insert(frame: pageScreenFrame): void {
+    this.insertWithInterpolation(frame);
+  }
+
+  public insertWithInterpolation(frame: pageScreenFrame): void {
+    this.status = VIDEO_WRITE_STATUS.IN_PROGRESS;
+    // Recorder has replaced with a default, must be not null
+    const fps = this.options.fps!;
+    const interFrameDelay = 1000 / fps;
+
+    if (this.lastWriteTimestamp === null) {
+      this.videoMediatorStream.write(frame.blob);
+      this.lastWriteTimestamp = performance.now(); // ensure monotonic
+    } else {
+      while (this.lastWriteTimestamp < performance.now()) {
+        // interpolate dropped frames
+        this.videoMediatorStream.write(frame.blob);
+        this.lastWriteTimestamp += interFrameDelay;
+      }
+    }
+  }
+
+  public insertLegacy(frame: pageScreenFrame): void {
     // reduce the queue into half when it is full
     if (this.screenCastFrames.length === this.screenLimit) {
       const numberOfFramesToSplice = Math.floor(this.screenLimit / 2);
@@ -251,8 +274,8 @@ export default class PageVideoStreamWriter extends EventEmitter {
   private trimFrame(fameList: pageScreenFrame[], chunckEndTime: number): pageScreenFrame[] {
     return fameList.map((currentFrame: pageScreenFrame, index: number) => {
       const endTime = (index !== fameList.length-1) ? fameList[index+1].timestamp : chunckEndTime;
-      const duration = endTime - currentFrame.timestamp; 
-        
+      const duration = endTime - currentFrame.timestamp;
+
       return {
         ...currentFrame,
         duration,
